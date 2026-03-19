@@ -12,17 +12,14 @@ function EndeavorTrackerTooltips:HookTaskTooltips(frame)
     -- Build the XP cache
     EndeavorTrackerCore:BuildTaskXPCache()
     
-    -- Hook GameTooltip globally to catch all tooltips
+    -- Reset the enhanced flag when the tooltip hides
     if not self._globalTooltipHooked then
-        GameTooltip:HookScript("OnShow", function(tooltip)
-            C_Timer.After(0.05, function()
-                EndeavorTrackerTooltips:EnhanceTaskTooltip(tooltip)
-            end)
+        GameTooltip:HookScript("OnHide", function(tooltip)
+            tooltip._ETEnhanced = nil
         end)
-        
         self._globalTooltipHooked = true
     end
-    
+
     -- Find and hook ScrollBox frames (they contain the task list)
     local hookedCount = 0
     local function FindAndHookScrollBoxes(parent, depth)
@@ -76,7 +73,7 @@ function EndeavorTrackerTooltips:HookSingleFrame(frame)
     if not frame or frame._ETFrameHooked then return end
     
     if frame.HookScript then
-        frame:HookScript("OnEnter", function(self)   
+        frame:HookScript("OnEnter", function(self)
             -- Try to get task info
             local taskID = self.taskID or self.InitiativeTaskID or self.initiativeTaskID
             if taskID and EndeavorTrackerCore.taskXPCache[taskID] then
@@ -87,7 +84,12 @@ function EndeavorTrackerTooltips:HookSingleFrame(frame)
                 GameTooltip:AddLine(" ")
                 GameTooltip:AddDoubleLine("Endeavor Contribution:", string.format("%.2f XP", taskData.amount), 1, 0.82, 0, 1, 1, 1)
                 GameTooltip:Show()
-            end          
+            else
+                -- No direct taskID — try to match by tooltip text after the tooltip populates
+                C_Timer.After(0.05, function()
+                    EndeavorTrackerTooltips:EnhanceTaskTooltip(GameTooltip)
+                end)
+            end
         end)
         frame:HookScript("OnLeave", function(self)
             GameTooltip:Hide()
@@ -100,30 +102,16 @@ function EndeavorTrackerTooltips:EnhanceTaskTooltip(tooltip)
     -- Check if tooltip is showing and has text
     if not tooltip:IsShown() then return end
     if not EndeavorTrackerCore.taskXPCache or not next(EndeavorTrackerCore.taskXPCache) then return end
-    
+
+    -- Use a flag to avoid re-enhancing and to avoid comparing tainted tooltip text
+    if tooltip._ETEnhanced then return end
+
     -- Try to extract task info from tooltip text
     local tooltipName = tooltip:GetName()
     if not tooltipName then return end
-    
-    -- Get all text lines from the tooltip
+
+    -- Search for matching task names
     local numLines = tooltip:NumLines()
-    
-    -- First, check if we've already added the contribution line
-    for i = 1, numLines do
-        local leftLine = _G[tooltipName .. "TextLeft" .. i]
-        if leftLine then
-            local success, result = pcall(function()
-                local text = leftLine:GetText()
-                return text and text == "Endeavor Contribution:"
-            end)
-            if success and result then
-                -- Already enhanced, don't add again
-                return
-            end
-        end
-    end
-    
-    -- Now search for matching task names
     for i = 1, numLines do
         local line = _G[tooltipName .. "TextLeft" .. i]
         if line then
@@ -137,10 +125,11 @@ function EndeavorTrackerTooltips:EnhanceTaskTooltip(tooltip)
                         return text == taskData.name or text:find(taskData.name, 1, true)
                     end)
                     if matchSuccess and isMatch then
-                        -- Add XP info
+                        -- Add XP info and mark as enhanced
                         tooltip:AddLine(" ")
                         tooltip:AddDoubleLine("Endeavor Contribution:", string.format("%.2f XP", taskData.amount), 1, 0.82, 0, 1, 1, 1)
                         tooltip:Show()
+                        tooltip._ETEnhanced = true
                         return
                     end
                 end
